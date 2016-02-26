@@ -1,0 +1,11 @@
+[run]
+branch=False
+data_file = .coverage
+
+[report]
+include=bottlecap/*
+show_missing = True
+#fail_under = 98
+
+[html]
+directory = build/coverage
