@@ -77,7 +77,7 @@ class BaseView(type):
 class View(with_metaclass(BaseView)):
     name = None
     method = None
-    name = None
+    path = None
     skip = None
     plugins = None
     config = None
