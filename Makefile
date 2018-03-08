@@ -5,7 +5,7 @@ DOCKER_OPTS := --rm -t -i -v `pwd`:/app
 all:
 
 test:
-	$(PIPENV_RUN) python3 -m pytest
+	$(PIPENV_RUN) python3 -m pytest -k auth
 
 test_pdb:
 	$(PIPENV_RUN) python3 -m pytest --pdb

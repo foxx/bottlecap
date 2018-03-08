@@ -10,6 +10,11 @@ six = '*'
 bottle = '*'
 helpful = '*'
 webtest = '*'
+pyjwt = "*"
+python-box = "*"
+cryptography = "*"
+blinker = "*"
+
 
 [dev-packages]
 pytest-cov = '*'
