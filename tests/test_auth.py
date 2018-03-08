@@ -110,5 +110,22 @@ class TestJWTAuthPlugin:
                              'error_desc': 'Invalid authorization header', 
                              'status_code': 400}
 
+        # invalid auth header should raise error
+        headers = {'Authorization': 'Bearer: '}
+        resp = app.webtest.get('/hello', headers=headers, expect_errors=True)
+        assert resp.status_code == 400
+        assert resp.json == {'error_code': 'bad_request', 
+                             'error_desc': 'Invalid authorization header', 
+                             'status_code': 400}
+
+        # invalid auth header should raise error
+        headers = {'Authorization': 'Bearer: wtf'}
+        resp = app.webtest.get('/hello', headers=headers, expect_errors=True)
+        assert resp.status_code == 400
+        assert resp.json == {'error_code': 'bad_request', 
+                             'error_desc': 'Invalid JWT', 
+                             'status_code': 400}
+
+
 
 

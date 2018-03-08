@@ -115,6 +115,8 @@ class JWTAuthPlugin:
         if self.jwt_public_key is None:
             raise RuntimeError("Stone: JWT Public Key not configured")
 
+        return token
+
     def get_user_from_token(self, token):
         """Lookup user for request"""
 
@@ -155,7 +157,13 @@ class JWTAuthPlugin:
             # extract raw token from request
             raw_token = self.get_token_from_request()
             if raw_token is None: return
-            token = self.token_decode(raw_token)
+
+            # try and decode token
+            try:
+                token = self.token_decode(raw_token)
+            except jwt.exceptions.InvalidTokenError:
+                raise ex.BadRequestError(error_desc='Invalid JWT')
+
             if token is None: return
             request.jwt = token
 
