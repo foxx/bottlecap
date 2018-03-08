@@ -232,6 +232,13 @@ class ContentNegotiationViewMixin(View):
                 response = HTTPResponse(response)
             response.body = cneg.renderer.render(response.body)
             response.content_type = cneg.response_content_type
+
+            # XXX: manually append charset due to bug
+            # https://github.com/bottlepy/bottle/issues/1048
+            if cneg.renderer.charset:
+                to_append = '; charset={}'.format(cneg.renderer.charset.upper())
+                response.content_type += to_append
+
         return response
 
     def pre_dispatch(self):
@@ -282,6 +289,8 @@ class ContentNegotiationViewMixin(View):
             cneg.parser = request.negotiator.select_parser(
                 media_type=cneg.request_content_type,
                 parsers=self.parser_classes or [])
+
+            # XXX: needs test
             if not cneg.parser:
                 raise HTTPError('415 Unsupported Media Type')
 

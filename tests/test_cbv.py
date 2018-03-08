@@ -4,7 +4,7 @@ import webtest
 
 from copy import copy
 from bottle import Bottle, HTTPResponse
-from bottlecap import BottleCap, View
+from bottlecap import View
 
 lol = '''
 class HelloView(View):

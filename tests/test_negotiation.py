@@ -69,7 +69,7 @@ class TestDefaultContentNegotiation(object):
 class TestContentNegotiationViewMixin(object):
     def test_form_parser(self, app):
         """Attempt to parse form data"""
-        @app.routecv
+        @app.routecbv
         class ExampleView(EchoView):
             parser_classes = [FormParser]
 
@@ -85,7 +85,7 @@ class TestContentNegotiationViewMixin(object):
     def test_json_parser_invalid_body(self, app, view_render_errors):
         """Attempt to parse invalid JSON payload"""
 
-        @app.routecv
+        @app.routecbv
         class ExampleView(JSONEchoView):
             render_errors = view_render_errors
 
@@ -97,7 +97,7 @@ class TestContentNegotiationViewMixin(object):
         if view_render_errors:
             assert resp.status == '400 Invalid Body'
             assert resp.body == b''
-            assert resp.headers['Content-Type'] == 'application/json'
+            assert resp.headers['Content-Type'] == 'application/json; charset=UTF-8'
         else:
             assert resp.status == '400 Invalid Body'
             assert b'DOCTYPE HTML PUBLIC' in resp.body
@@ -106,7 +106,7 @@ class TestContentNegotiationViewMixin(object):
     def test_json_parser(self, app):
         """Attempt to parse body with JSON"""
 
-        @app.routecv
+        @app.routecbv
         class ExampleView(JSONEchoView):
             parser_classes = [JSONParser]
 
@@ -115,10 +115,10 @@ class TestContentNegotiationViewMixin(object):
 
     def test_json_renderer(self, app):
         """Ensure JSON renderer is working"""
-        app.routecv(JSONEchoView)
+        app.routecbv(JSONEchoView)
         resp = app.webtest.get('/echo')
         assert resp.status == '200 OK'
-        assert resp.headers['Content-Type'] == 'application/json'
+        assert resp.headers['Content-Type'] == 'application/json; charset=UTF-8'
         assert resp.body == b'[1, 2, 3]'
 
     def test_renderer_selection(self, app):
@@ -126,7 +126,7 @@ class TestContentNegotiationViewMixin(object):
         class MultiRenderer(Renderer):
             media_types = ['vnd/example', 'vnd/hello']
 
-        @app.routecv
+        @app.routecbv
         class TestView(EchoView):
             renderer_classes = [MultiRenderer]
             mismatch_renderer_class = MultiRenderer
@@ -155,7 +155,7 @@ class TestContentNegotiationViewMixin(object):
     def test_dispatch_error(self, app, view_render_errors):
         """Dispatch raises an HTTPError"""
 
-        @app.routecv
+        @app.routecbv
         class ExampleView(ExampleErrorView):
             render_errors = view_render_errors
             renderer_classes = [JSONRenderer]
@@ -166,7 +166,7 @@ class TestContentNegotiationViewMixin(object):
         if view_render_errors:
             assert resp.status == '418 Teapot'
             assert resp.body == b'[1, 2, 3]'
-            assert resp.headers['Content-Type'] == 'application/json'
+            assert resp.headers['Content-Type'] == 'application/json; charset=UTF-8'
         else:
             assert resp.status == '418 Teapot'
             assert b'DOCTYPE HTML PUBLIC' in resp.body
@@ -175,7 +175,7 @@ class TestContentNegotiationViewMixin(object):
     def test_guess_content_type(self, app):
         """Content type header is missing on request"""
 
-        @app.routecv
+        @app.routecbv
         class ExampleView(JSONEchoView):
             parser_classes = [OctetStreamParser]
 
@@ -184,7 +184,7 @@ class TestContentNegotiationViewMixin(object):
 
         assert resp.status == '200 OK'
         assert resp.body == b'[1, 2, 3]'
-        assert resp.headers['Content-Type'] == 'application/json'
+        assert resp.headers['Content-Type'] == 'application/json; charset=UTF-8'
 
         assert request.body_parsed == b'wtf'
         assert request.negotiation_context.parser == OctetStreamParser
@@ -193,7 +193,7 @@ class TestContentNegotiationViewMixin(object):
     def test_invalid_content_type(self, app, view_render_errors):
         """Content type header is invalid on request"""
 
-        @app.routecv
+        @app.routecbv
         class ExampleView(JSONEchoView):
             render_errors = view_render_errors
 
@@ -205,7 +205,7 @@ class TestContentNegotiationViewMixin(object):
         if view_render_errors:
             assert resp.status == '400 Invalid Content Type'
             assert resp.body == b''
-            assert resp.headers['Content-Type'] == 'application/json'
+            assert resp.headers['Content-Type'] == 'application/json; charset=UTF-8'
         else:
             assert resp.status == '400 Invalid Content Type'
             assert b'DOCTYPE HTML PUBLIC' in resp.body
@@ -215,7 +215,7 @@ class TestContentNegotiationViewMixin(object):
     def test_invalid_accept_header(self, app, view_render_errors):
         """Accept header is invalid on request"""
 
-        @app.routecv
+        @app.routecbv
         class ExampleView(JSONEchoView):
             render_errors = view_render_errors
 
@@ -229,10 +229,10 @@ class TestContentNegotiationViewMixin(object):
 
     def test_missing_accept_header(self, app):
         """Accept header missing on request"""
-        app.routecv(JSONEchoView)
+        app.routecbv(JSONEchoView)
         resp = app.webtest.get('/echo')
         assert resp.status == '200 OK'
-        assert resp.headers['Content-Type'] == 'application/json'
+        assert resp.headers['Content-Type'] == 'application/json; charset=UTF-8'
         assert resp.body == b'[1, 2, 3]'
 
     def test_mismatch_accept_header_true(self, app):
@@ -240,7 +240,7 @@ class TestContentNegotiationViewMixin(object):
         Accept header does not match any renderers, however
         a mismatch renderer has been provided
         """
-        @app.routecv
+        @app.routecbv
         class ExampleView(JSONEchoView):
             mismatch_renderer_class = ExampleRenderer
 
@@ -260,7 +260,7 @@ class TestContentNegotiationViewMixin(object):
         Accept header does not match any renderers, and no
         mismatch renderer has been provided
         """
-        @app.routecv
+        @app.routecbv
         class ExampleView(JSONEchoView):
             mismatch_renderer_class = None
             render_errors = view_render_errors
@@ -273,19 +273,40 @@ class TestContentNegotiationViewMixin(object):
         assert b'DOCTYPE HTML PUBLIC' in resp.body
         assert request.negotiation_context.renderer == None
 
-    
-lol = '''
-
     def test_plain_text_renderer(self, app):
-        cneg = ContentNegotiation(renderers=PlainTextRenderer())
-        view = get_echo_view(cneg)
-        app.routecv(view)
+        """Ensure plain text is rendered correctly
+        """
+        @app.routecbv
+        class ExampleView(EchoView):
+            renderer_classes = [PlainTextRenderer]
+
+            def dispatch(self):
+                return HTTPResponse('hello')
 
         resp = app.webtest.get('/echo')
         assert resp.status_code == 200
+        assert resp.headers['Content-Type'] == 'text/plain; charset=UTF-8'
         assert resp.body == b'hello'
-        assert isinstance(request.cneg.renderer, PlainTextRenderer)
+        assert request.negotiation_context.renderer == PlainTextRenderer
 
+    def test_html_renderer(self, app):
+        """Ensure html is rendered correctly
+        """
+        @app.routecbv
+        class ExampleView(EchoView):
+            renderer_classes = [HTMLRenderer]
+
+            def dispatch(self):
+                return HTTPResponse('hello')
+
+        resp = app.webtest.get('/echo')
+        assert resp.status_code == 200
+        assert resp.headers['Content-Type'] == 'text/html; charset=UTF-8'
+        assert resp.body == b'hello'
+        assert request.negotiation_context.renderer == HTMLRenderer
+
+
+'''
     def test_html_renderer(self, app):
         cneg = ContentNegotiation(renderers=HTMLRenderer())
         view = get_echo_view(cneg)

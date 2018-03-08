@@ -1,11 +1,10 @@
 import code
 import click
 
-from six import with_metaclass
 from six.moves.urllib.parse import urljoin
 from bottle import Bottle, request
 from decimal import Decimal
-from helpful import ClassDict, ensure_subclass
+from helpful import ensure_subclass, extend_instance
 
 
 ############################################################
@@ -22,6 +21,7 @@ class RequestMixin(object):
             request.urlparts.scheme,
             request.urlparts.hostname)
         port = request.urlparts.port
+        # XXX: needs test
         if port and port not in (80, 443):
             url += ":{}".format(port)
         return url
@@ -44,37 +44,7 @@ class RequestMixin(object):
 # CBVs (class based views)
 ############################################################
 
-class MetaOptions(ClassDict):
-    pass
-
-
-class BaseView(type):
-    def __new__(cls, name, bases, attrs):
-        # XXX: eww, cleanme
-        obj = super(BaseView, cls).__new__(cls, name, bases, attrs)
-
-        # look for options from bases
-        options = MetaOptions()
-        for b in bases:
-            meta = getattr(b, '_meta', None)
-            if meta:
-                options.update(meta)
-
-        # extract meta options
-        meta = attrs.pop('Meta', None)
-        if meta:
-            keys = [ key for key in dir(meta) 
-                if not key.startswith('_') ]
-            new_options = MetaOptions([ 
-                (key, getattr(meta, key)) for key in keys ])
-
-            options.update(new_options)
-
-        obj._meta = options
-        return obj
-
-
-class View(with_metaclass(BaseView)):
+class View:
     name = None
     method = None
     path = None
@@ -174,21 +144,11 @@ def cli_shell(ctx): # pragma: no cover
 # BottleCap application
 ############################################################
 
+class BottleCapMixin:
+    """Mixin applied to bottle application upon installation
+    """
 
-class BottleCap(Bottle):
-    """Adds additional features into Bottle"""
-    cli = cli
-
-    def __init__(self, *args, **kwargs):
-        super(BottleCap, self).__init__(*args, **kwargs)
-        self.add_hook('before_request', self.hook_before_request)
-
-    def hook_before_request(self):
-        """Executed before every request"""
-        request.base_url = RequestMixin.base_url
-        request.get_full_url = RequestMixin.get_full_url
-
-    def routecv(self, view):
+    def routecbv(self, view):
         """
         Same as route(), but for CBVs (class based views)
 
@@ -211,3 +171,31 @@ class BottleCap(Bottle):
 
         self.route(**kwargs)(view.as_callable())
         return view
+
+
+class BottleCapPlugin:
+    def __init__(self):
+        super().__init__()
+
+    def setup(self, app):
+        # ensure this plugin isn't already installed
+        for other in app.plugins:
+            # XXX: needs test
+            if isinstance(other, BottleCapPlugin):
+                raise PluginError('Bottlecap already installed on app')
+
+        # add necessary hooks
+        app.add_hook('before_request', self.hook_before_request)
+
+        # extend app
+        extend_instance(app, BottleCapMixin)
+
+    def hook_before_request(self):
+        """Executed before every request"""
+        # XXX: for some reason, we cannot use extend_instance on request :X
+        request.base_url = RequestMixin.base_url
+        request.get_full_url = RequestMixin.get_full_url
+
+    def apply(self, callback, context):
+        return callback
+
