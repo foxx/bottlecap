@@ -1,6 +1,8 @@
 import code
 import click
 import json
+import inspect
+import bottle
 
 from six.moves.urllib.parse import urljoin
 from bottle import Bottle, request, HTTPError, HTTPResponse
@@ -8,6 +10,9 @@ from decimal import Decimal
 from helpful import ensure_subclass, extend_instance
 from bottlecap import exceptions as ex
 from blinker import signal
+
+from bottlecap.negotiation import ContentNegotiationPlugin
+from bottlecap.views import View
 
 ############################################################
 # Bottle Cap mixin
@@ -42,38 +47,124 @@ class RequestMixin(object):
         return urljoin(self.base_url, url)
 
 
+
+
 ############################################################
-# CBVs (class based views)
+# BottleCap application
 ############################################################
 
-class View:
-    name = None
-    method = None
-    path = None
-    skip = None
-    plugins = None
-    config = None
+class BottleCapMixin:
+    """Mixin applied to bottle application upon installation
+    """
 
-    def __init__(self, **url_args):
-        self.url_args = url_args
-        self.request = request
+    def route(self, *args, **kwargs):
+        # treat cbv routing differently
+        cls = args[0] if len(args) else None
+        if inspect.isclass(cls) and issubclass(cls, View):
+            return self.routecbv(cls)
+        
+        # fallback to standard routing
+        return super().route(*args, **kwargs)
 
-    def __call__(self):
-        self.pre_dispatch()
-        return self.dispatch()
+    def routecbv(self, view):
+        """
+        Same as route(), but for CBVs (class based views)
 
-    def dispatch(self): # pragma: nocover
-        # XXX: should replace with ABCs
-        raise NotImplementedError("Subclass must implement dispatch")
+        :attr view: View class
+        """
+        ensure_subclass(view, View)
 
-    @classmethod
-    def as_callable(cls):
-        def inner(**url_args):
-            return cls(**url_args)()
-        return inner
+        # views must provide at least path and method
+        if not view._meta.path:
+            raise RuntimeError('CBV does not specify `path` in meta')
+        if not view._meta.method:
+            raise RuntimeError('CBV does not specify `method` in meta')
 
-    def pre_dispatch(self):
-        pass
+        kwargs = {}
+        kwargs['path'] = view._meta.path
+        kwargs['method'] = view._meta.method
+        kwargs['name'] = view._meta.name
+        kwargs['skip'] = view._meta.skip
+        kwargs['apply'] = view._meta.plugins
+        kwargs['meta'] = view._meta
+
+        cb = view.as_callable()
+        self.route(**kwargs)(cb)
+        return view
+
+    def default_error_handler(self, exc):
+        """
+        Errors should always use content negotiation from view by default,
+        otherwise fallback onto the application defaults
+        """
+        assert False
+        if hasattr(request, 'nctx'):
+            return request.nctx.negotiator.render_response(exc)
+        raise exc
+
+
+class BottleCap:
+
+    def __init__(self):
+        super().__init__()
+        self.signal_exception = signal('exception')
+
+    def setup(self, app):
+        # ensure this plugin isn't already installed
+        for other in app.plugins:
+            # XXX: needs test
+            if isinstance(other, BottleCap):
+                raise PluginError('BottleCap already installed on app')
+
+        # setup content negotiation plugin
+        #cnp = self.content_negotiation_plugin_class()
+        #app.install(cnp)
+
+        # we must always disable autojson
+        #app.config['json.disable'] = True
+        #app.config['json.enable'] = False
+        #app.config['autojson'] = False
+
+        # extend app
+        extend_instance(app, BottleCapMixin)
+
+    def apply(self, callback, context):
+        def wrapper(*args, **kwargs):
+            raise HTTPError('415 wtf', {})
+            # XXX: for some reason, we cannot use extend_instance on request :X
+            request.base_url = RequestMixin.base_url
+            request.get_full_url = RequestMixin.get_full_url
+
+            # process request
+            try:
+                return callback(*args, **kwargs)
+            except Exception as exc:
+                self.handle_exception(exc)
+                raise
+        return wrapper
+
+    def handle_exception(self, exc):
+        """
+        BottleCap becomes the default handler for all exceptions and
+        never passes them upstream, effectively eliminating catchall
+        functionality
+        """
+        # All exceptions are passed to subscribers for processing
+        self.signal_exception.send(exc)
+
+        # Any exceptions extending HTTPError should be handled as-is
+        if isinstance(exc, HTTPError): return
+
+        # Exceptions extending BaseError should always be converted
+        if isinstance(exc, ex.BaseError):
+            body = exc.to_dict()
+            nexc = HTTPError(exc.status_code, body)
+            raise nexc
+
+        # All other exceptions should be converted into HTTPError
+        #if request.app.catchall is True:
+        #    nexc = ex.ServerError()
+        #    raise HTTPError(nexc.status_code, nexc.to_dict())
 
 
 ############################################################
@@ -141,89 +232,4 @@ def cli_ishell(ctx): # pragma: no cover
 def cli_shell(ctx): # pragma: no cover
     code.interact(local=locals())
 
-
-############################################################
-# BottleCap application
-############################################################
-
-class BottleCapMixin:
-    """Mixin applied to bottle application upon installation
-    """
-
-    def routecbv(self, view):
-        """
-        Same as route(), but for CBVs (class based views)
-
-        :attr view: View class
-        """
-        ensure_subclass(view, View)
-
-        kwargs = {}
-        kwargs['path'] = view.path
-        kwargs['method'] = view.method
-        kwargs['name'] = view.name
-        kwargs['skip'] = view.skip
-        kwargs['config'] = view.config
-        kwargs['apply'] = view.plugins
-
-        assert view.path, \
-            "View meta must provide a valid `path`"
-        assert view.method, \
-            "View meta must provide a valid `method`"
-
-        self.route(**kwargs)(view.as_callable())
-        return view
-
-    def default_error_handler(self, exc):
-        # XXX: Errors should be rendered according to content negotiation,
-        #      but for now it's forcing JSON. This is disgusting. Sorry.
-        return HTTPResponse(exc.body, status=exc.status_code, 
-                            content_type='application/json')
-        #body = json.dumps(exc.body)
-        #resp = HTTPResponse(
-        #return exc
-        #raise exc
-
-
-
-class BottleCap:
-    def __init__(self):
-        super().__init__()
-        self.signal_exception = signal('exception')
-
-    def setup(self, app):
-        # ensure this plugin isn't already installed
-        for other in app.plugins:
-            # XXX: needs test
-            if isinstance(other, BottleCap):
-                raise PluginError('BottleCap already installed on app')
-
-        # add necessary hooks
-        app.add_hook('before_request', self.hook_before_request)
-
-        # extend app
-        extend_instance(app, BottleCapMixin)
-
-    def hook_before_request(self):
-        """Executed before every request"""
-        # XXX: for some reason, we cannot use extend_instance on request :X
-        request.base_url = RequestMixin.base_url
-        request.get_full_url = RequestMixin.get_full_url
-
-    def apply(self, callback, context):
-        def wrapper(*args, **kwargs):
-            try:
-                return callback(*args, **kwargs)
-            except Exception as exc:
-                self.signal_exception.send(exc)
-                return self.handle_exception(exc)
-                raise
-        return wrapper
-
-    def handle_exception(self, exc):
-        # client errors always rendered
-        if isinstance(exc, ex.ClientError):
-            body = exc.to_dict()
-            return HTTPError(exc.status_code, body, exception=exc)
-        raise
 

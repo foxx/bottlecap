@@ -1,1 +1,2 @@
-from bottlecap.plugin import BottleCap, View
+from bottlecap.plugin import BottleCap
+from bottlecap.views import View

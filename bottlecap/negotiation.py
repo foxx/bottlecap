@@ -1,19 +1,24 @@
+import functools
+
 from six import with_metaclass
 from json import JSONDecoder, JSONEncoder
 from bottle import HTTPResponse, HTTPError, request
-from bottlecap import View
 from helpful import (ClassDict, NoneType, makelist, 
     iter_ensure_instance, ensure_instance, flatteniter, 
     get_exception)
 
-from .mediatype import *
+from bottlecap import exceptions as ex
 
-__all__ = ['ContentNegotiationContext', 'Renderer', 'PlainTextRenderer', 
-           'HTMLRenderer', 'JSONRenderer', 'Parser', 'JSONParser', 'FormParser', 
-           'DefaultContentNegotiation', 'OctetStreamParser',
-           'ContentNegotiationViewMixin']
+from bottlecap.mediatype import *
 
-# XXX: Charset handling appears to be broken, needs fix
+from functools import wraps
+from bottlecap import exceptions as ex
+
+
+__all__ = ['BaseRenderer', 'Renderer', 'PlainTextRenderer', 'HTMLRenderer',
+           'JSONRenderer', 'BaseParser', 'Parser', 'OctetStreamParser',
+           'JSONParser', 'FormParser', 'ContentNegotiationContext', 
+           'ContentNegotiation', 'ContentNegotiationPlugin']
 
 ############################################################
 # Renderers
@@ -130,22 +135,49 @@ class FormParser(Parser):
 # Base objects
 ############################################################
 
-class ContentNegotiationContext(ClassDict):
+class ContentNegotiationContext:
     """
     Injected into `bottle.request` on every request which
     has content negotiation enabled
     """
-    def __init__(self):
-        super(ContentNegotiationContext, self).__init__()
-        self.parser = None
-        self.renderer = None
-        self.request_content_type = None
-        self.request_accept = None
-        self.response_content_type = None
-        self.negotiation = None
+
+    # Parser instance for request body
+    parser = None
+
+    # Renderer instance for response body
+    renderer = None
+
+    # Request Content-Type header represented as MediaType instance 
+    request_content_type = None
+
+    # Accept headers represented as MediaTypeList instance
+    request_accept = None
+
+    # Response Content-Type header represented as MediaType instance
+    response_content_type = None
+
+    # Content negotiation instance
+    negotiator = None
 
 
-class DefaultContentNegotiation(object):
+class ContentNegotiation:
+    """
+    Class based decorator for content negotiation
+    """
+
+    parser_classes = None
+    renderer_classes = None
+    mismatch_renderer_class = None
+
+    def __init__(self, parser_classes=None, renderer_classes=None,
+                 mismatch_renderer_class=None):
+        if parser_classes is not None:
+            self.parser_classes = parser_classes
+        if renderer_classes is not None:
+            self.renderer_classes = renderer_classes
+        if mismatch_renderer_class is not None:
+            self.mismatch_renderer_class = mismatch_renderer_class
+
     def guess_content_type(self, body):
         """
         As per RFC7231 section 3.1.1.5, attempt to guess content type
@@ -156,148 +188,162 @@ class DefaultContentNegotiation(object):
 
         :returns: MediaType instance
         """
-        if body:
+        if body: 
             return MediaType('application/octet-stream')
 
-    def select_parser(self, media_type, parsers):
+    def select_parser(self, media_type):
         """
         Determine which parser should be used for request
 
         :attr media_type: Media type to match
-        :attr parsers: list of parser classes
-        :returns: ContentParser instance
         """
-        for parser in parsers:
+        for parser in self.parser_classes or []:
             matched = parser.media_types.first_match(media_type)
             if matched: return parser
         return None
 
-    def select_renderer(self, media_type, renderers):
+    def select_renderer(self, media_type):
         """
         Determine which renderer should be used for response
 
         :attr media_type: Media type to match
-        :attr renderers: list of renderer classes
         :returns: (renderer, media_type)
         """
-        for renderer in renderers:
+        for renderer in self.renderer_classes or []:
             matched = renderer.media_types.first_match(media_type)
             if matched: 
                 return renderer, matched[1]
         return None, None
 
+    def __call__(self, fn):
+        @functools.wraps(fn)
+        def wrapper(*args, **kwargs):
+            self.process_request()
+            resp = fn(*args, **kwargs)
+            return self.render_response(resp)
+        return wrapper
 
-class ContentNegotiationViewMixin(View):
-    # Content negotiation class to use
-    content_negotiation_class = DefaultContentNegotiation
-
-    # Choose from these parsers, if no matching content type
-    # can be found then return "415 Unsupported Media Type"
-    parser_classes = None
-
-    # Choose from these renderers, if no matching content type
-    # can be found then return the first by default
-    # See http://tools.ietf.org/html/rfc7231#section-5.3.2
-    renderer_classes = None
-
-    # If client provides an Accept header which is not present in
-    # our list of renderers, then use this one by default. Otherwise
-    # return "406 Not Acceptable"
-    # See http://tools.ietf.org/html/rfc7231#section-5.3.2
-    mismatch_renderer_class = None
-
-    # Error responses should be rendered, instead of being handled
-    # by the application error handlers. If no renderer can be determined
-    # then fallback to the app error handlers
-    render_errors = True
-
-    def __call__(self):
-        request.negotiation_context = cneg = ContentNegotiationContext()
-        request.negotiator = self.content_negotiation_class()
-        request.body_parsed = None
-
-        try:
-            response = super(ContentNegotiationViewMixin, self).__call__()
-        except HTTPResponse:
-            if not self.render_errors:
-                raise
-            if self.render_errors:
-                if not cneg.renderer:
-                    raise
-                response = HTTPResponse()
-                get_exception().apply(response)
-
-        if cneg.renderer:
-            if not isinstance(response, HTTPResponse):
-                response = HTTPResponse(response)
-            response.body = cneg.renderer.render(response.body)
-            response.content_type = cneg.response_content_type
-
-            # XXX: manually append charset due to bug
-            # https://github.com/bottlepy/bottle/issues/1048
-            if cneg.renderer.charset:
-                to_append = '; charset={}'.format(cneg.renderer.charset.upper())
-                response.content_type += to_append
-
-        return response
-
-    def pre_dispatch(self):
-        super(ContentNegotiationViewMixin, self).pre_dispatch()
-        body = request._get_body_string()
-        cneg = request.negotiation_context
+    def process_request(self):
+        # ensure content negotiation has not already been applied
+        if hasattr(request, 'negotiation_context'):
+            raise RuntimeError('Content negotiation applied twice on same request')
+            
+        # assign negotiation context
+        request.nctx = nctx = ContentNegotiationContext()
+        nctx.negotiator = self
 
         # determine which content types are accepted by the client
         try:
             raw_accept = request.headers.get('Accept', '*/*')
-            cneg.request_accept = MediaTypeList(raw_accept)
+            nctx.request_accept = MediaTypeList(raw_accept)
         except ParseError as e:
-            raise HTTPError('400 Invalid Accept', 
-                exception=get_exception())
-
-        # find appropriate renderer
-        if cneg.request_accept:
-            cneg.renderer, cneg.response_content_type = \
-                request.negotiator.select_renderer(
-                    media_type=cneg.request_accept,
-                    renderers=self.renderer_classes or [])
-
-            if not cneg.renderer:
-                if self.renderer_classes:
-                    if not self.mismatch_renderer_class:
-                        raise HTTPError('406 Not Acceptable')
-                    cneg.renderer = self.mismatch_renderer_class
-                    cneg.response_content_type = \
-                        self.mismatch_renderer_class.default_media_type
+            raise ex.ClientError(
+                status_code='400 Invalid Accept',
+                error_code='bad_request',
+                error_desc="The request header 'Accept' was malformed")
 
         # determine what content type is sent by the request
         try:
             raw_content_type = request.headers.get('Content-Type', None)
             if raw_content_type:
-                cneg.request_content_type = MediaType(raw_content_type)
+                nctx.request_content_type = MediaType(raw_content_type)
         except ParseError:
-            raise HTTPError(
-                status='400 Invalid Content Type',
-                exception=get_exception())
+            raise ex.ClientError(
+                status_code='400 Invalid Content Type',
+                error_code='bad_request',
+                error_desc="The request header 'Content-Type' was malformed")
+
+        # looks like content negotiation is enabled on this view
+        request.body_parsed = None
+        body = request._get_body_string()
+
+        # assign default renderer class
+        if self.mismatch_renderer_class:
+            nctx.renderer = self.mismatch_renderer_class
+            nctx.response_content_type = nctx.renderer.default_media_type
+
+        # find appropriate renderer
+        if nctx.request_accept:
+            nctx.renderer, nctx.response_content_type = \
+                self.select_renderer(nctx.request_accept)
+            
+            # could not negotiate an appropriate renderer
+            if (not nctx.renderer and self.renderer_classes \
+                and not self.mismatch_renderer_class):
+                raise ex.ClientError(
+                    status_code='406 Not Acceptable',
+                    error_code='bad_request',
+                    error_desc="The server could not negotiate response content based " \
+                               "on the 'Accept-*' request headers")
 
         # attempt to guess content type if necessary
         if body and not raw_content_type:
-            cneg.request_content_type = \
-                request.negotiator.guess_content_type(body)
+            nctx.request_content_type = self.guess_content_type(body)
 
         # find appropriate content parser
-        if cneg.request_content_type:
-            cneg.parser = request.negotiator.select_parser(
-                media_type=cneg.request_content_type,
-                parsers=self.parser_classes or [])
+        if nctx.request_content_type:
+            nctx.parser = self.select_parser(nctx.request_content_type)
 
             # XXX: needs test
-            if not cneg.parser:
-                raise HTTPError('415 Unsupported Media Type')
+            if not nctx.parser:
+                raise ex.ClientError(
+                    status_code='415 Unsupported Media Type',
+                    error_code='bad_request',
+                    error_desc='The specified content type for request body is unsupported')
 
         # process body
-        if cneg.parser:
+        if nctx.parser:
             try:
-                request.body_parsed = cneg.parser.parse(body)
-            except:
-                raise HTTPError("400 Invalid Body", 
-                    exception=get_exception())
+                request.body_parsed = nctx.parser.parse(body)
+            except Exception as exc:
+                raise ex.ClientError(
+                    status_code='400 Invalid Body',
+                    error_code='bad_request',
+                    error_desc='There was an error parsing the request body',
+                    error_detail=str(exc))
+
+    def render_response(self, resp):
+        assert False, 'WTF BRUJ'
+        # always ensure we have a http response instance
+        if not isinstance(resp, HTTPResponse):
+            resp = HTTPResponse(resp)
+
+        # create new response type
+        nresp = HTTPResponse()
+        resp.apply(nresp)
+        if not request.nctx.renderer: return nresp
+
+        # apply rendering
+        nresp.body = request.nctx.renderer.render(nresp.body)
+        nresp.content_type = request.nctx.response_content_type
+ 
+        # XXX: manually append charset due to bug
+        # https://github.com/bottlepy/bottle/issues/1048
+        if request.nctx.renderer.charset:
+            to_append = '; charset={}'.format(request.nctx.renderer.charset.upper())
+            nresp.content_type += to_append
+
+        return nresp
+
+
+class ContentNegotiationPlugin:
+    """
+    Plugin for Content Negotiation
+    """
+    def __init__(self, negotiation_class=ContentNegotiation):
+        self.negotiation_class = negotiation_class
+
+    def apply(self, callback, context):
+        # should we use view specific negotiation or default?
+        cfg = context['config']
+        cls = cfg.meta.content_negotiation_class
+        cls = cls if cls else self.negotiation_class
+
+        # create negotiation instance
+        cneg = cls(parser_classes=cfg.meta.parser_classes,
+                   renderer_classes=cfg.meta.renderer_classes,
+                   mismatch_renderer_class=cfg.meta.mismatch_renderer_class)
+
+        # apply content negotiation logic, then continue processing
+        return cneg(callback)
+

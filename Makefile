@@ -5,7 +5,7 @@ DOCKER_OPTS := --rm -t -i -v `pwd`:/app
 all:
 
 test:
-	$(PIPENV_RUN) python3 -m pytest -k auth
+	$(PIPENV_RUN) python3 -m pytest -k negotiation
 
 test_pdb:
 	$(PIPENV_RUN) python3 -m pytest --pdb
@@ -28,6 +28,7 @@ clean:
 		.coverage dist build .eggs
 	find . -name "*.pyc" -exec rm -rf {} \;
 	find . -name "__pycache__" -exec rm -rf {} \;
+	find . -name "*.swp" -exec rm -rf {} \;
 
 submit:
 	python setup.py sdist upload

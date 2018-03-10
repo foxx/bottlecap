@@ -1,20 +1,29 @@
 import pytest
+import bottle
 
 from webtest import TestApp
 from bottle import Bottle
 from bottlecap import BottleCap
+from bottlecap.views import View
+from bottlecap.negotiation import ContentNegotiationPlugin
 
-def hello():
-    return 'world'
+class HelloView(View):
+    class Meta:
+        path = '/hello'
+        method = ['GET']
+
+    def dispatch(self):
+        return 'world'
 
 
 @pytest.fixture
 def app(request):
     app = Bottle(catchall=False)
-    app.route('/hello', ['GET'], hello)
     app.webtest = TestApp(app)
 
     bc = BottleCap()
     app.install(bc)
 
+    app.route(HelloView)
+   
     return app

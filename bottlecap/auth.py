@@ -104,16 +104,20 @@ class JWTAuthPlugin:
 
         auth = request.headers['Authorization']
         if not auth.startswith('Bearer:'):
-            raise ex.BadRequestError(error_desc='Invalid authorization header')
+            raise ex.BadRequestError(
+                error_desc="Request authorization failed",
+                error_detail="Request header 'Authorization' does not contain 'Bearer' token")
 
         # extract auth token
         token = auth.split(':', 1)[1].strip()
         if not token:
-            raise ex.BadRequestError(error_desc='Invalid authorization header')
+            raise ex.BadRequestError(
+                error_desc="Request authorization failed",
+                error_detail="Request header 'Authorization' contains malformed 'Bearer' token")
 
         # we require a public key to proceed
         if self.jwt_public_key is None:
-            raise RuntimeError("Stone: JWT Public Key not configured")
+            raise RuntimeError("BottleCap: JWT Public Key not configured")
 
         return token
 
@@ -162,7 +166,9 @@ class JWTAuthPlugin:
             try:
                 token = self.token_decode(raw_token)
             except jwt.exceptions.InvalidTokenError:
-                raise ex.BadRequestError(error_desc='Invalid JWT')
+                raise ex.BadRequestError(
+                    error_desc='Request authorization failed',
+                    error_detail="Failed to decode token")
 
             if token is None: return
             request.jwt = token

@@ -1,11 +1,10 @@
 """Exception classes of this library"""
 
 class BaseError(Exception):
-    """Base exception class
-    """
+    """Base exception class"""
 
     def __init__(self, status_code:int=None, error_code:str=None, error_desc:str=None, 
-                 errors=None, original_exc:Exception=None):
+                 error_detail=None, original_exc:Exception=None):
         super().__init__(self)
 
         if status_code is not None: 
@@ -15,15 +14,18 @@ class BaseError(Exception):
         if error_desc is not None:
             self.error_desc = error_desc
 
-        self.errors = errors
+        self.error_detail = error_detail
         self.original_exc = original_exc
 
+    def __str__(self):
+        return "[status_code={}, code={}, desc={}]".format(
+            self.status_code, self.error_code, self.error_desc)
+
     def to_dict(self):
-        o = dict(error_code=self.error_code,
-                 error_desc=self.error_desc,
-                 status_code=self.status_code)
-        if self.errors: o['errors'] = self.errors
-        return o
+        return dict(error_code=self.error_code,
+                    error_desc=self.error_desc,
+                    status_code=self.status_code,
+                    error_detail=self.error_detail)
 
 
 class ServerError(BaseError):
