@@ -18,11 +18,8 @@ class HelloView(View):
 
 @pytest.fixture
 def app(request):
-    app = Bottle(catchall=False)
+    app = BottleCap(catchall=False)
     app.webtest = TestApp(app)
-
-    bc = BottleCap()
-    app.install(bc)
 
     app.route(HelloView)
    

@@ -53,9 +53,46 @@ class RequestMixin(object):
 # BottleCap application
 ############################################################
 
-class BottleCapMixin:
-    """Mixin applied to bottle application upon installation
-    """
+class BottleCap(Bottle):
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.signal_exception = signal('exception')
+
+        # disable all existing plugins
+        self.plugins = []
+        
+        # install content negotiation plugin
+        cnp = ContentNegotiationPlugin()
+        self.install(cnp)
+
+        # we must always disable autojson
+        #app.config['json.disable'] = True
+        #app.config['json.enable'] = False
+        #app.config['autojson'] = False
+
+    def apply(self, callback, context):
+        def wrapper(*args, **kwargs):
+            # XXX: for some reason, we cannot use extend_instance on request :X
+            request.base_url = RequestMixin.base_url
+            request.get_full_url = RequestMixin.get_full_url
+
+            # process request
+            return callback(*args, **kwargs)
+        return wrapper
+
+    #def handle_exception(self, exc):
+    #    """
+    #    BottleCap becomes the default handler for all exceptions and
+    #    never passes them upstream, effectively eliminating catchall
+    #    functionality
+    #    """
+    #    # All exceptions are passed to subscribers for processing
+    #    self.signal_exception.send(exc)
+        # All other exceptions should be converted into HTTPError
+        #if request.app.catchall is True:
+        #    nexc = ex.ServerError()
+        #    raise HTTPError(nexc.status_code, nexc.to_dict())
 
     def route(self, *args, **kwargs):
         # treat cbv routing differently
@@ -92,79 +129,13 @@ class BottleCapMixin:
         self.route(**kwargs)(cb)
         return view
 
-    def default_error_handler(self, exc):
-        """
-        Errors should always use content negotiation from view by default,
-        otherwise fallback onto the application defaults
-        """
-        assert False
-        if hasattr(request, 'nctx'):
-            return request.nctx.negotiator.render_response(exc)
-        raise exc
+    #def default_error_handler(self, exc):
+    #    """
+    #    Errors should always use content negotiation from view by default,
+    #    otherwise fallback onto the application defaults
+    #    """
+    #    raise exc
 
-
-class BottleCap:
-
-    def __init__(self):
-        super().__init__()
-        self.signal_exception = signal('exception')
-
-    def setup(self, app):
-        # ensure this plugin isn't already installed
-        for other in app.plugins:
-            # XXX: needs test
-            if isinstance(other, BottleCap):
-                raise PluginError('BottleCap already installed on app')
-
-        # setup content negotiation plugin
-        #cnp = self.content_negotiation_plugin_class()
-        #app.install(cnp)
-
-        # we must always disable autojson
-        #app.config['json.disable'] = True
-        #app.config['json.enable'] = False
-        #app.config['autojson'] = False
-
-        # extend app
-        extend_instance(app, BottleCapMixin)
-
-    def apply(self, callback, context):
-        def wrapper(*args, **kwargs):
-            raise HTTPError('415 wtf', {})
-            # XXX: for some reason, we cannot use extend_instance on request :X
-            request.base_url = RequestMixin.base_url
-            request.get_full_url = RequestMixin.get_full_url
-
-            # process request
-            try:
-                return callback(*args, **kwargs)
-            except Exception as exc:
-                self.handle_exception(exc)
-                raise
-        return wrapper
-
-    def handle_exception(self, exc):
-        """
-        BottleCap becomes the default handler for all exceptions and
-        never passes them upstream, effectively eliminating catchall
-        functionality
-        """
-        # All exceptions are passed to subscribers for processing
-        self.signal_exception.send(exc)
-
-        # Any exceptions extending HTTPError should be handled as-is
-        if isinstance(exc, HTTPError): return
-
-        # Exceptions extending BaseError should always be converted
-        if isinstance(exc, ex.BaseError):
-            body = exc.to_dict()
-            nexc = HTTPError(exc.status_code, body)
-            raise nexc
-
-        # All other exceptions should be converted into HTTPError
-        #if request.app.catchall is True:
-        #    nexc = ex.ServerError()
-        #    raise HTTPError(nexc.status_code, nexc.to_dict())
 
 
 ############################################################

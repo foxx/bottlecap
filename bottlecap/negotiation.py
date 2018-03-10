@@ -218,14 +218,36 @@ class ContentNegotiation:
     def __call__(self, fn):
         @functools.wraps(fn)
         def wrapper(*args, **kwargs):
-            self.process_request()
-            resp = fn(*args, **kwargs)
-            return self.render_response(resp)
+            try:
+                self.process_request()
+                resp = fn(*args, **kwargs)
+                return self.render_response(resp)
+            except Exception as exc:
+                self.handle_exception(exc)
+                raise
         return wrapper
+
+    def handle_exception(self, exc):
+        # Errors should be rendered using content negotiation, where possible
+        renderer = None
+        if hasattr(request, 'nctx'):
+            renderer = request.nctx.negotiator.render_response
+
+        # Any exceptions extending HTTPError should be handled as-is
+        # HTTPError should be rendered then re-raised
+        if isinstance(exc, HTTPError):
+            if renderer: exc.body = renderer(exc.body)
+            return
+
+        # BaseError should be rendered into new HTTPError
+        if isinstance(exc, ex.BaseError):
+            nexc = HTTPError(exc.status_code, exc.to_dict(), exception=exc)
+            nresp = renderer(nexc)
+            raise nresp
 
     def process_request(self):
         # ensure content negotiation has not already been applied
-        if hasattr(request, 'negotiation_context'):
+        if hasattr(request, 'nctx'):
             raise RuntimeError('Content negotiation applied twice on same request')
             
         # assign negotiation context
@@ -303,7 +325,6 @@ class ContentNegotiation:
                     error_detail=str(exc))
 
     def render_response(self, resp):
-        assert False, 'WTF BRUJ'
         # always ensure we have a http response instance
         if not isinstance(resp, HTTPResponse):
             resp = HTTPResponse(resp)
@@ -333,6 +354,13 @@ class ContentNegotiationPlugin:
     def __init__(self, negotiation_class=ContentNegotiation):
         self.negotiation_class = negotiation_class
 
+    def setup(self, app):
+        # ensure this plugin isn't already installed
+        for other in app.plugins:
+            # XXX: needs test
+            if isinstance(other, ContentNegotiationPlugin):
+                raise PluginError('ContentNegotiationPlugin already installed on app')
+
     def apply(self, callback, context):
         # should we use view specific negotiation or default?
         cfg = context['config']
@@ -344,6 +372,6 @@ class ContentNegotiationPlugin:
                    renderer_classes=cfg.meta.renderer_classes,
                    mismatch_renderer_class=cfg.meta.mismatch_renderer_class)
 
-        # apply content negotiation logic, then continue processing
+        # do we have a renderer?
         return cneg(callback)
 
